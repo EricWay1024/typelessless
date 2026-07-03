@@ -63,10 +63,34 @@ into one. Never summarize: output ≈ input length minus fillers and true
 redundancy. If merging risks losing a nuance, keep both. When unsure whether an
 edit is licensed, don't make it."""
 
+_L4_POLISH = """Licensed edits — this is the most aggressive mode:
+- Sentence segmentation, punctuation, capitalization.
+- Remove pure vocal noise: um, uh, 呃, 嗯.
+- Remove false starts / self-corrections: keep the intended final version.
+- Remove contentless fillers (那个, 就是, "like", "you know"); collapse stutters
+  and immediate repeats.
+- Merge genuinely redundant restatements of the same point.
+- Reorder clauses and sentences freely so related ideas sit together, and split
+  run-ons.
+- Merge across sentence boundaries: when one idea is spoken in pieces spread over
+  several sentences — or the speaker circles back to an earlier point after a
+  digression — gather those pieces and combine them into one coherent sentence.
+- You MAY rephrase connectives, fix grammar, and rewrite wording for readability.
+  This mode SUPERSEDES the invariant above about preserving the speaker's exact
+  word choices and register.
+
+Never relaxed, even here: never translate and never swap a word for its
+other-language equivalent; add no fact, number, name, or claim the speaker did
+not say; drop no information the speaker did say; never change the intended
+meaning. The output is the speaker's own content, reorganized and smoothed into
+clean sentences — not a summary, not shorter than the ideas require, and not
+your own opinions."""
+
 DEFAULT_MODES = [
     {"name": "chatting", "use_llm": True, "prompt": _L1_CHATTING},
     {"name": "working", "use_llm": True, "prompt": _L2_WORKING},
     {"name": "cleaning", "use_llm": True, "prompt": _L3_CLEANING},
+    {"name": "polish", "use_llm": True, "prompt": _L4_POLISH},
 ]
 
 DEFAULT_SETTINGS = {
