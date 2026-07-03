@@ -59,41 +59,71 @@ class Hotkey:
 
     def start(self) -> None:
         import sys
+        import threading
 
         from pynput import keyboard
 
-        matches = self._matcher(keyboard)
         suppress_vks = self._suppress_vks(keyboard)
+
+        def dispatch(fn) -> None:
+            # Run the action off the hook thread so the low-level keyboard hook
+            # returns immediately (Windows silently drops slow hooks).
+            if fn is not None:
+                threading.Thread(target=fn, daemon=True).start()
+
+        def fire_press() -> None:
+            dispatch(self._on_start if self._mode == "hold" else self._on_toggle)
+
+        def fire_release() -> None:
+            if self._mode == "hold":
+                dispatch(self._on_stop)
+
+        # Windows: pynput's suppress_event() aborts the event *before* it reaches
+        # on_press/on_release, so a suppressed key would fire no callback. We
+        # therefore detect the key and act inside the filter, then swallow it so
+        # it can't also reach the focused app.
+        if sys.platform == "win32" and suppress_vks:
+            _DOWN = {0x100, 0x104}  # WM_KEYDOWN, WM_SYSKEYDOWN (Alt = SYS*)
+            _UP = {0x101, 0x105}    # WM_KEYUP, WM_SYSKEYUP
+
+            def win32_event_filter(msg, data):
+                if data.vkCode not in suppress_vks:
+                    return True  # let every other key through untouched
+                if msg in _DOWN:
+                    if not self._down:
+                        self._down = True
+                        fire_press()
+                elif msg in _UP:
+                    if self._down:
+                        self._down = False
+                        fire_release()
+                self._listener.suppress_event()  # raises → swallows the key
+
+            self._listener = keyboard.Listener(
+                on_press=lambda *a: None,
+                on_release=lambda *a: None,
+                win32_event_filter=win32_event_filter,
+            )
+            self._listener.start()
+            return
+
+        # Fallback (non-Windows, or a key with no known vk): passive listener,
+        # no suppression — the key also reaches other apps.
+        matches = self._matcher(keyboard)
 
         def on_press(key):
             if self._down or not matches(key):
                 return
             self._down = True
-            if self._mode == "hold":
-                if self._on_start:
-                    self._on_start()
-            elif self._on_toggle:
-                self._on_toggle()
+            fire_press()
 
         def on_release(key):
             if not self._down or not matches(key):
                 return
             self._down = False
-            if self._mode == "hold" and self._on_stop:
-                self._on_stop()
+            fire_release()
 
-        kwargs = {"on_press": on_press, "on_release": on_release}
-        if sys.platform == "win32" and suppress_vks:
-            # Swallow the activation key system-wide — it is still delivered to
-            # our callbacks, but no longer reaches the focused app (so Right Alt
-            # stops triggering menus/focus elsewhere).
-            def win32_event_filter(msg, data):
-                if data.vkCode in suppress_vks:
-                    self._listener.suppress_event()
-
-            kwargs["win32_event_filter"] = win32_event_filter
-
-        self._listener = keyboard.Listener(**kwargs)
+        self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self._listener.start()
 
     def stop(self) -> None:
