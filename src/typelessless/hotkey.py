@@ -45,10 +45,25 @@ class Hotkey:
         target = getattr(Key, name)
         return lambda key: key == target
 
+    def _suppress_vks(self, keyboard) -> set[int]:
+        """Virtual-key codes to swallow so the key never reaches other apps."""
+        name = self._key_name.strip().lower()
+        Key = keyboard.Key
+        if name in _RIGHT_ALT:
+            return {0xA5}  # VK_RMENU (Right Alt)
+        if len(name) == 1:
+            vk = getattr(keyboard.KeyCode.from_char(name), "vk", None)
+            return {vk} if vk else set()
+        vk = getattr(getattr(Key, name).value, "vk", None)
+        return {vk} if vk else set()
+
     def start(self) -> None:
+        import sys
+
         from pynput import keyboard
 
         matches = self._matcher(keyboard)
+        suppress_vks = self._suppress_vks(keyboard)
 
         def on_press(key):
             if self._down or not matches(key):
@@ -67,7 +82,18 @@ class Hotkey:
             if self._mode == "hold" and self._on_stop:
                 self._on_stop()
 
-        self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        kwargs = {"on_press": on_press, "on_release": on_release}
+        if sys.platform == "win32" and suppress_vks:
+            # Swallow the activation key system-wide — it is still delivered to
+            # our callbacks, but no longer reaches the focused app (so Right Alt
+            # stops triggering menus/focus elsewhere).
+            def win32_event_filter(msg, data):
+                if data.vkCode in suppress_vks:
+                    self._listener.suppress_event()
+
+            kwargs["win32_event_filter"] = win32_event_filter
+
+        self._listener = keyboard.Listener(**kwargs)
         self._listener.start()
 
     def stop(self) -> None:

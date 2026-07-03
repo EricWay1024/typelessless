@@ -41,7 +41,25 @@ def main() -> None:
     from typelessless import config as config_mod
     from typelessless.app import App
 
-    App(config_mod.load()).run()
+    try:
+        App(config_mod.load()).run()
+    except Exception:
+        import traceback
+
+        _fatal(traceback.format_exc())
+
+
+def _fatal(message: str) -> None:
+    """Show a startup error that survives a double-click (no vanishing console)."""
+    sys.stderr.write(message + "\n")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message[-1800:], "typelessless — error", 0x10)
+        except Exception:
+            pass
+    sys.exit(1)
 
 
 if __name__ == "__main__":
