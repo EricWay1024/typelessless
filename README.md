@@ -1,109 +1,133 @@
 # typelessless
 
-Voice dictation you own end-to-end. Press a key, speak (freely mixing 中文 and
-English), press again — cleaned text is inserted into whatever field has focus.
-No subscription, no lock-in.
+A voice-dictation tool you own end-to-end — a self-hosted alternative to
+Typeless for Windows, built for people who speak **中文 and English mixed
+together**. Press a key, talk (switching languages mid-sentence), press again —
+cleaned text is inserted into whatever field has focus. No subscription, your
+own API keys, your own prompts.
 
-- **STT:** [Soniox](https://soniox.com) realtime — genuine mid-sentence 中/英
-  code-switching, with custom-vocabulary bias.
-- **Cleanup:** Claude Haiku, per-mode prompts you control (optional — a mode can
-  return raw transcripts).
-- **Activation:** **Right Alt** by default, as a **toggle** (press to start,
-  press again to stop). Walkie-talkie *hold* mode is also available.
-- **Modes:** *working* / *chatting* (or your own), switched from the tray.
+```
+Right Alt (toggle) → mic (16 kHz) → Soniox STT  (语言提示 en+zh, 词汇偏置)
+   → mode router (auto by focused app) → Claude cleanup → paste into focused field
+```
+
+## Features
+
+- **Real 中/英 code-switching** via [Soniox](https://soniox.com) realtime STT —
+  mid-sentence language switching, no manual toggling, with custom-vocabulary bias.
+- **LLM cleanup** via Claude, with a global "core" prompt plus per-mode prompts.
+  Four default modes, escalating in aggressiveness:
+  `chatting` (verbatim+) · `working` (remove fillers/false starts) ·
+  `cleaning` (reorder/merge redundancy) · `polish` (cross-sentence merge + rewrite).
+- **Auto mode selection by focused window** — e.g. focus VS Code → `working`;
+  configurable app→mode rules, else a default mode.
+- **Settings web UI** (tray → Settings) to create/edit modes, the global prompt,
+  the vocabulary, the default mode, and the routing rules — no file editing.
+- **History web UI** (tray → Show history) — every dictation is logged with its
+  audio; **retry** re-transcribes a saved recording and copies the result. The
+  raw audio is saved *before* any network call, so a failed request never loses
+  a recording.
+- **Floating waveform indicator** at the bottom-center of the monitor under your
+  cursor (red = recording, amber = processing).
+- **Mutes system audio while recording** (restored on stop).
+- **Push-to-talk toggle** on Right Alt (fully suppressed so it doesn't leak to
+  other apps); walkie-talkie *hold* mode also available.
+- **Login autostart** toggle; runs as a tray app with no console.
 - Provider-facing code sits behind interfaces — swap Soniox or Claude (or a
   local model) without touching the app.
 
-```
-Right Alt (toggle) → mic (16 kHz) → Soniox STT (hints=[en,zh] + vocab bias)
-   → mode router → Claude Haiku cleanup [or raw] → paste into focused field
-```
+## Bring your own keys
 
-Phase 1 (this repo): Windows desktop app. Phase 2: Android IME reusing the same
-Soniox + cleanup contract.
+You supply your own [Soniox](https://console.soniox.com) key (STT) and, for
+cleanup, an [Anthropic](https://console.anthropic.com) key. They live in
+`config.toml`, which is **gitignored** — it is never committed. You can also set
+`$SONIOX_API_KEY` / `$ANTHROPIC_API_KEY` instead and leave the file blank.
 
-## Install as a Windows app (single .exe)
+Rough cost: Soniox ≈ $0.10–0.12 / hour of audio; Claude Haiku cleanup is a
+fraction of a cent per utterance. A few dollars a month in normal use.
 
-On Windows with Python 3.11+:
+## Install (Windows, single .exe)
+
+Windows with Python 3.11+:
 
 ```powershell
-git clone <this repo>
+git clone https://github.com/EricWay1024/typelessless
 cd typelessless
 ./build.ps1
 ```
 
 `build.ps1` creates a venv, installs everything, and produces
-**`dist\typelessless.exe`** plus a `dist\config.toml` to fill in. Then:
+**`dist\typelessless.exe`** plus a `dist\config.toml`. Then:
 
 1. Edit `dist\config.toml` — add your Soniox key (and Anthropic key for cleanup).
-2. Double-click **`dist\typelessless.exe`**. A tray icon appears.
-3. Press **Right Alt**, speak, press **Right Alt** again → the text is inserted.
-
-To launch on login, drop a shortcut to `typelessless.exe` into `shell:startup`.
-To hide the log console once you trust it, set `console=False` in
-`typelessless.spec` and rebuild.
+2. Double-click **`dist\typelessless.exe`** — a tray icon appears.
+3. Press **Right Alt**, speak, press **Right Alt** again → text is inserted.
+4. Tray → **Settings** to customize modes/prompts/vocab/rules; **Show history**
+   to review, play back, and retry past dictations; **Start on login** to
+   autostart.
 
 ## Run from source (dev)
 
 ```powershell
-./run.ps1              # venv + install + config.toml + run, in one step
+./run.ps1     # venv + install + config.toml + run, in one step
 ```
 
-or manually:
-
-```powershell
-python -m venv .venv; .\.venv\Scripts\activate
-pip install -e .
-copy config.example.toml config.toml    # add keys
-python -m typelessless
-```
-
-## Verify the pipeline first (any OS, no mic)
-
-Confirm your keys, vocab, and prompts against a real audio file — needs only a
-Soniox key (+ optional Anthropic key), and works on Linux/macOS too:
+Verify the STT+cleanup pipeline against an audio file on any OS (no mic needed):
 
 ```bash
 pip install websockets anthropic
-cp config.example.toml config.toml       # add keys
+cp config.example.toml config.toml     # add keys
 python -m typelessless filetest sample.wav working
+python -m typelessless check            # verify all components load
 ```
 
-Prints the raw Soniox transcript and the cleaned result.
+## Configuration
 
-## Configuration (`config.toml`)
+- `config.toml` (system settings, hand-edited): API keys, STT model,
+  `language_hints`, hotkey, injection method, `mute_while_recording`. See
+  `config.example.toml`.
+- **Modes, prompts, global prompt, vocabulary, and app→mode rules** are managed
+  in the **Settings web UI** (tray → Settings) and stored in
+  `%APPDATA%\typelessless\settings.json`. On first run this is seeded from the
+  built-in defaults (`src/typelessless/settings.py`).
 
-See `config.example.toml` (annotated). Highlights:
-
-- `[keys]` — Soniox + Anthropic (or leave blank → `$SONIOX_API_KEY` /
-  `$ANTHROPIC_API_KEY`).
-- `[stt].language_hints` — e.g. `["en","zh"]`; this is what drives code-switching.
-- `[hotkey].key` / `.mode` — default `key="alt_r"`, `mode="toggle"` (or `"hold"`).
-- `[inject].method` — `"paste"` (default, Unicode-safe) or `"type"`.
-- `[vocab].terms` — names / jargon / math; biases STT **and** normalizes spelling
-  during cleanup.
-- `[modes.<name>].prompt` — per-mode cleanup prompt. "Reload config" in the tray
-  applies edits live.
+Logs and recordings live under `%APPDATA%\typelessless\`
+(`dictations.log`, `history.json`, `recordings\`).
 
 ## Layout
 
 ```
 src/typelessless/
-  config.py        load config.toml (+ env fallback, exe-relative when frozen)
-  modes.py         Mode dataclass
-  audio.py         mic capture (sounddevice)
-  stt/{base,soniox}.py     STT interface + Soniox realtime WebSocket client
+  config.py / settings.py   system config (toml) + editable settings (json)
+  modes.py                  Mode dataclass
+  audio.py                  mic capture (sounddevice)
+  stt/{base,soniox}.py      STT interface + Soniox realtime WebSocket client
   cleanup/{base,claude,passthrough}.py
-  inject.py        Windows paste / unicode-type
-  hotkey.py        global hotkey — toggle or hold (pynput)
-  tray.py          system-tray menu (pystray)
-  app.py           orchestrator
-  filetest.py      offline pipeline check
-typelessless.spec  PyInstaller build → dist/typelessless.exe
+  inject.py                 Windows paste / unicode-type
+  hotkey.py                 global hotkey — toggle or hold, key-suppressing (pynput)
+  overlay.py                floating waveform indicator (Win32/ctypes)
+  sysmute.py                mute system audio (Core Audio COM via ctypes)
+  foreground.py             focused-window detection for mode routing
+  history.py / webui.py     recording store + local history/settings web UI
+  dictlog.py / startup.py   dictation log + login autostart
+  tray.py / app.py          tray menu + orchestrator
+  filetest.py / selfcheck.py
+typelessless.spec           PyInstaller build → dist/typelessless.exe
 build.ps1 / run.ps1
 ```
 
-## Cost
+## Prebuilt binaries & licenses
 
-Soniox ≈ $0.10–0.12/hr of audio; Haiku cleanup is fractions of a cent per
-utterance (cached system prompt). A few dollars a month in normal use.
+This project is **MIT-licensed** (see [LICENSE](LICENSE)). It depends on
+`pynput` and `pystray` (both **LGPL-3.0**), used as ordinary pip packages — this
+does not affect the license of this code. If you distribute a **prebuilt**
+`typelessless.exe` (PyInstaller-bundled), note that LGPL asks that recipients be
+able to replace those libraries; the simplest way to satisfy that is to point
+users at this source and `build.ps1` so they can rebuild. Distributing the
+**source** has no such caveat. Other dependencies (`anthropic`, `websockets`,
+`sounddevice`, `pillow`, `pyperclip`) are MIT/BSD.
+
+## Status
+
+Windows desktop app (working). An Android IME reusing the same Soniox + cleanup
+contract is a possible next phase.
