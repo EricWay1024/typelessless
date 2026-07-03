@@ -14,9 +14,9 @@ def _rgb(r: int, g: int, b: int) -> int:
 _BG = _rgb(26, 27, 32)
 _REC = _rgb(255, 99, 99)     # coral red — recording
 _PROC = _rgb(255, 185, 70)   # amber — processing
-_BARS = 26
-_W, _H = 208, 40
-_ALPHA = 236
+_BARS = 21
+_W, _H = 176, 40
+_ALPHA = 205
 _MARGIN_BOTTOM = 26
 
 
@@ -175,19 +175,19 @@ class StatusOverlay:
             if self._cur == "recording":
                 lv = list(self._get_levels() or [])[-_BARS:]
                 return [0.05] * (_BARS - len(lv)) + lv
-            return [max(0.08, 0.34 + 0.26 * math.sin(self._phase * 0.28 + i * 0.5)) for i in range(_BARS)]
+            return [max(0.12, 0.52 + 0.44 * math.sin(self._phase * 0.28 + i * 0.5)) for i in range(_BARS)]
 
         def draw(memdc, w, h):
             color = _REC if self._cur == "recording" else _PROC
             brush = gdi32.CreateSolidBrush(color)
             ob = gdi32.SelectObject(memdc, brush)
             op = gdi32.SelectObject(memdc, gdi32.GetStockObject(NULL_PEN))
-            pad = 16
+            pad = 13
             slot = (w - 2 * pad) / _BARS
-            bw = max(3, int(slot * 0.5))
+            bw = max(3, int(slot * 0.55))
             for i, lv in enumerate(bar_values()):
                 lv = 0.0 if lv < 0 else 1.0 if lv > 1 else lv
-                bh = int(6 + lv * (h - 18))
+                bh = int(4 + lv * (h - 10))
                 cx = pad + i * slot + slot / 2
                 x0 = int(cx - bw / 2)
                 y0 = (h - bh) // 2

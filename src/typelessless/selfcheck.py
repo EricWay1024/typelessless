@@ -28,6 +28,7 @@ def run_check() -> bool:
         "typelessless.overlay",
         "typelessless.dictlog",
         "typelessless.startup",
+        "typelessless.sysmute",
         "typelessless.history",
         "typelessless.webui",
         "typelessless.stt.soniox",

@@ -20,6 +20,7 @@ class Config:
     hotkey_mode: str
     inject_method: str
     restore_clipboard: bool
+    mute_on_record: bool
     vocab: list[str]
     cleanup_model: str
     default_mode: str
@@ -61,6 +62,7 @@ def load(path: str | None = None) -> Config:
     stt = raw.get("stt", {})
     hotkey = raw.get("hotkey", {})
     inject = raw.get("inject", {})
+    audio = raw.get("audio", {})
     vocab = list(raw.get("vocab", {}).get("terms", []))
     cleanup = raw.get("cleanup", {})
 
@@ -85,6 +87,7 @@ def load(path: str | None = None) -> Config:
         hotkey_mode=str(hotkey.get("mode", "toggle")),
         inject_method=inject.get("method", "paste"),
         restore_clipboard=bool(inject.get("restore_clipboard", True)),
+        mute_on_record=bool(audio.get("mute_while_recording", True)),
         vocab=vocab,
         cleanup_model=cleanup.get("model", "claude-haiku-4-5"),
         default_mode=default_mode,

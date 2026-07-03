@@ -5,7 +5,7 @@ import threading
 from collections import deque
 
 from . import config as config_mod
-from . import dictlog, history, startup
+from . import dictlog, history, startup, sysmute
 from .audio import Microphone
 from .cleanup.claude import ClaudeCleaner
 from .cleanup.passthrough import Passthrough
@@ -33,6 +33,7 @@ class App:
         self._mic = None
         self._audio_buf = bytearray()
         self._levels: deque = deque(maxlen=48)  # recent audio levels for the waveform
+        self._prev_mute = None
         self._icon = None
         self._hotkey = None
         self._overlay = None
@@ -108,12 +109,25 @@ class App:
                 total += v * v
                 count += 1
             rms = (total / count) ** 0.5 / 32768.0
-            self._levels.append(min(1.0, rms * 6.0))
+            self._levels.append(min(1.0, rms * 7.5))
         except Exception:
             pass
 
     def audio_levels(self) -> list:
         return list(self._levels)
+
+    def _mute_system(self, on: bool) -> None:
+        if not self.cfg.mute_on_record:
+            return
+        try:
+            if on:
+                self._prev_mute = sysmute.get_mute()
+                sysmute.set_mute(True)
+            else:
+                sysmute.set_mute(bool(self._prev_mute))
+                self._prev_mute = None
+        except Exception:
+            pass
 
     def start_recording(self) -> None:
         with self._lock:
@@ -121,6 +135,7 @@ class App:
                 return
             self._recording = True
         try:
+            self._mute_system(True)
             self._audio_buf = bytearray()
             self._levels.clear()
             self._session = self._stt.open_session(audio_format="pcm_s16le")
@@ -132,6 +147,7 @@ class App:
             print(f"[rec] failed to start: {exc}")
             self._recording = False
             self._session = self._mic = None
+            self._mute_system(False)
             self._set_state("idle")
 
     def stop_recording(self) -> None:
@@ -139,6 +155,7 @@ class App:
             if not self._recording:
                 return
             self._recording = False
+        self._mute_system(False)  # restore audio the moment recording stops
         self._set_state("processing")
         threading.Thread(target=self._finalize, daemon=True).start()
 

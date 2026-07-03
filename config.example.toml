@@ -29,6 +29,11 @@ mode = "toggle"
 method = "paste"
 restore_clipboard = true
 
+[audio]
+# Mute the system's audio output while recording (so music/video playback
+# doesn't bleed into your session). The prior mute state is restored on stop.
+mute_while_recording = true
+
 [vocab]
 # Terms that bias STT recognition AND are used to normalize spelling in cleanup.
 # Put names, jargon, and math/technical vocabulary here.
