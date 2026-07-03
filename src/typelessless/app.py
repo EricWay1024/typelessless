@@ -5,12 +5,13 @@ import threading
 from collections import deque
 
 from . import config as config_mod
-from . import dictlog, history, startup, sysmute
+from . import dictlog, foreground, history, settings, startup, sysmute
 from .audio import Microphone
 from .cleanup.claude import ClaudeCleaner
 from .cleanup.passthrough import Passthrough
 from .hotkey import Hotkey
 from .inject import inject_text
+from .modes import Mode
 from .overlay import StatusOverlay
 from .stt.soniox import SonioxClient
 
@@ -18,8 +19,18 @@ from .stt.soniox import SonioxClient
 class App:
     def __init__(self, cfg: config_mod.Config):
         self.cfg = cfg
+        # User-editable settings (modes / prompts / vocab / rules), seeded from
+        # config.toml on first run, then owned by the Settings web UI.
+        seed = {
+            "global_prompt": "",
+            "vocab": list(cfg.vocab),
+            "default_mode": cfg.default_mode,
+            "modes": [{"name": n, "prompt": m.prompt, "use_llm": m.use_llm} for n, m in cfg.modes.items()],
+            "rules": [],
+        }
         self.active_mode = cfg.default_mode
-        self.modes = list(cfg.modes.keys())
+        self.settings = settings.load(seed)
+        self._apply_settings(self.settings)
 
         self._passthrough = Passthrough()
         self._stt = None
@@ -28,11 +39,11 @@ class App:
 
         self._lock = threading.Lock()
         self._recording = False
-        self._state = "idle"  # idle | recording | processing  (drives the overlay)
+        self._state = "idle"
         self._session = None
         self._mic = None
         self._audio_buf = bytearray()
-        self._levels: deque = deque(maxlen=48)  # recent audio levels for the waveform
+        self._levels: deque = deque(maxlen=48)
         self._prev_mute = None
         self._icon = None
         self._hotkey = None
@@ -40,14 +51,27 @@ class App:
         self._webui_url = None
         self._stop_event = threading.Event()
 
-    # --- setup ----------------------------------------------------------
+    # --- settings-derived state -----------------------------------------
+    def _apply_settings(self, s: dict) -> None:
+        self._global_prompt = s.get("global_prompt", "")
+        self._vocab = list(s.get("vocab", []))
+        self._rules = list(s.get("rules", []))
+        self._smodes = {
+            m["name"]: Mode(m["name"], m.get("prompt", ""), bool(m.get("use_llm", True)))
+            for m in s.get("modes", [])
+        }
+        if not self._smodes:
+            self._smodes = {"working": Mode("working", "", True)}
+        self.modes = list(self._smodes.keys())
+        dm = s.get("default_mode")
+        self._default_mode = dm if dm in self._smodes else self.modes[0]
+        if self.active_mode not in self._smodes:
+            self.active_mode = self._default_mode
+
     def _build_backends(self) -> None:
         self._stt = SonioxClient(
-            self.cfg.soniox_key,
-            self.cfg.stt_model,
-            self.cfg.sample_rate,
-            self.cfg.language_hints,
-            self.cfg.vocab,
+            self.cfg.soniox_key, self.cfg.stt_model, self.cfg.sample_rate,
+            self.cfg.language_hints, self._vocab,
         )
         self._llm = None
         if self.cfg.anthropic_key:
@@ -57,11 +81,15 @@ class App:
                 print(f"[cleanup] Claude unavailable ({exc}); modes will use raw transcripts.")
 
     def _cleaner_for(self, mode):
-        if mode.use_llm and self._llm is not None:
-            return self._llm
-        return self._passthrough
+        return self._llm if (mode.use_llm and self._llm is not None) else self._passthrough
 
-    # --- state ----------------------------------------------------------
+    def _effective_mode(self, mode: Mode) -> Mode:
+        gp = (self._global_prompt or "").strip()
+        mp = (mode.prompt or "").strip()
+        prompt = f"{gp}\n\n{mp}".strip() if gp else mp
+        return Mode(mode.name, prompt, mode.use_llm)
+
+    # --- state / status -------------------------------------------------
     def status(self) -> str:
         return self._state
 
@@ -75,10 +103,23 @@ class App:
                 pass
 
     def set_mode(self, name: str) -> None:
-        if name in self.cfg.modes:
+        if name in self._smodes:
             self.active_mode = name
             self._set_state(self._state)
             print(f"[mode] {name}")
+
+    def _pick_mode(self) -> str:
+        """Choose a mode from the focused window: first matching rule, else the
+        default mode."""
+        try:
+            exe, title = foreground.active_app()
+        except Exception:
+            exe = title = ""
+        for r in self._rules:
+            m = (r.get("match") or "").lower()
+            if m and (m in exe or m in title) and r.get("mode") in self._smodes:
+                return r["mode"]
+        return self._default_mode if self._default_mode in self._smodes else self.modes[0]
 
     # --- activation -----------------------------------------------------
     def toggle(self) -> None:
@@ -102,7 +143,7 @@ class App:
             a.frombytes(pcm if len(pcm) % 2 == 0 else pcm[:-1])
             if not a:
                 return
-            step = max(1, len(a) // 800)  # subsample to bound cost
+            step = max(1, len(a) // 800)
             total = count = 0
             for i in range(0, len(a), step):
                 v = a[i]
@@ -135,6 +176,7 @@ class App:
                 return
             self._recording = True
         try:
+            self.active_mode = self._pick_mode()  # auto-select from the focused app
             self._mute_system(True)
             self._audio_buf = bytearray()
             self._levels.clear()
@@ -142,7 +184,7 @@ class App:
             self._mic = Microphone(self.cfg.sample_rate, self._feed_audio)
             self._mic.start()
             self._set_state("recording")
-            print("[rec] listening…")
+            print(f"[rec] listening… (mode: {self.active_mode})")
         except Exception as exc:  # noqa: BLE001
             print(f"[rec] failed to start: {exc}")
             self._recording = False
@@ -155,7 +197,7 @@ class App:
             if not self._recording:
                 return
             self._recording = False
-        self._mute_system(False)  # restore audio the moment recording stops
+        self._mute_system(False)
         self._set_state("processing")
         threading.Thread(target=self._finalize, daemon=True).start()
 
@@ -170,10 +212,8 @@ class App:
             except Exception:
                 pass
 
-            # Save the audio FIRST — before any network call — so it can't be
-            # lost even if transcription/cleanup/insert fails.
             entry = None
-            if len(buf) >= self.cfg.sample_rate:  # ~0.5 s of 16-bit @16k or more
+            if len(buf) >= self.cfg.sample_rate:  # ~0.5 s or more
                 entry = history.create_entry(buf, self.cfg.sample_rate, self.active_mode)
 
             try:
@@ -192,10 +232,10 @@ class App:
                 return
             print(f"[stt] {transcript!r}")
 
-            mode = self.cfg.modes[self.active_mode]
+            mode = self._smodes[self.active_mode]
             notes = []
             try:
-                cleaned = self._cleaner_for(mode).clean(transcript, mode, self.cfg.vocab)
+                cleaned = self._cleaner_for(mode).clean(transcript, self._effective_mode(mode), self._vocab)
             except Exception as exc:  # noqa: BLE001
                 print(f"[cleanup] {exc}; using raw transcript.")
                 dictlog.append("error", f"cleanup: {exc}")
@@ -212,13 +252,11 @@ class App:
                 notes.append(f"inject: {exc}")
 
             if entry:
-                history.mark(
-                    entry["id"], status="ok", transcript=transcript, text=cleaned, error="; ".join(notes)
-                )
+                history.mark(entry["id"], status="ok", transcript=transcript, text=cleaned, error="; ".join(notes))
         finally:
             self._set_state("idle")
 
-    # --- retry / history (used by the web UI) ---------------------------
+    # --- retry / history (web UI) ---------------------------------------
     def history_entries(self):
         return history.entries(200)
 
@@ -233,7 +271,6 @@ class App:
                 pass
 
     def retry_entry(self, eid: str) -> None:
-        """Re-transcribe a saved recording, re-clean it, and copy the result."""
         entry = history.get(eid)
         wav = history.wav_path(entry)
         if entry is None or wav is None:
@@ -256,9 +293,9 @@ class App:
         if not transcript:
             history.mark(eid, status="failed", error="no transcript")
             return
-        mode = self.cfg.modes.get(entry.get("mode")) or self.cfg.modes[self.active_mode]
+        mode = self._smodes.get(entry.get("mode")) or self._smodes[self._default_mode]
         try:
-            cleaned = self._cleaner_for(mode).clean(transcript, mode, self.cfg.vocab)
+            cleaned = self._cleaner_for(mode).clean(transcript, self._effective_mode(mode), self._vocab)
         except Exception as exc:  # noqa: BLE001
             cleaned = transcript
             history.mark(eid, status="ok", transcript=transcript, text=cleaned, error=f"cleanup: {exc}")
@@ -272,6 +309,28 @@ class App:
         except Exception:
             pass
 
+    # --- settings API (web UI) ------------------------------------------
+    def get_settings(self) -> dict:
+        return self.settings
+
+    def save_settings(self, data: dict) -> dict:
+        self.settings = settings.save(data)
+        self._apply_settings(self.settings)
+        self._build_backends()  # vocab may have changed → refresh Soniox context
+        self._refresh_menu()
+        print("[settings] saved")
+        return self.settings
+
+    def _refresh_menu(self) -> None:
+        if self._icon is not None:
+            try:
+                from .tray import build_menu
+
+                self._icon.menu = build_menu(self)
+                self._icon.update_menu()
+            except Exception:
+                pass
+
     # --- tray actions ---------------------------------------------------
     def open_log(self) -> None:
         dictlog.open_log()
@@ -281,6 +340,12 @@ class App:
             import webbrowser
 
             webbrowser.open(self._webui_url)
+
+    def show_settings(self) -> None:
+        if self._webui_url:
+            import webbrowser
+
+            webbrowser.open(self._webui_url + "settings")
 
     def startup_enabled(self) -> bool:
         return startup.is_enabled()
@@ -292,11 +357,10 @@ class App:
     def reload(self) -> None:
         try:
             self.cfg = config_mod.load()
-            self.modes = list(self.cfg.modes.keys())
-            if self.active_mode not in self.cfg.modes:
-                self.active_mode = self.cfg.default_mode
+            self.settings = settings.load()
+            self._apply_settings(self.settings)
             self._build_backends()
-            self._set_state(self._state)
+            self._refresh_menu()
             print("[config] reloaded")
         except Exception as exc:  # noqa: BLE001
             print(f"[config] reload failed: {exc}")
@@ -332,11 +396,11 @@ class App:
             how = f"Press [{self.cfg.hotkey}] to start, press again to stop + insert"
 
         self._hotkey.start()
-        print(f"typelessless running. {how}. Mode: {self.active_mode}. (tray → history/log/quit)")
+        print(f"typelessless running. {how}. (tray → settings/history/quit)")
 
         self._icon = make_icon(self)
         try:
-            self._icon.run()  # blocks on the main thread until Quit
+            self._icon.run()
         finally:
             self._stop_event.set()
             if self._hotkey is not None:
