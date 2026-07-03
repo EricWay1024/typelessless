@@ -16,9 +16,12 @@ sample_rate = 16000
 language_hints = ["en", "zh"]
 
 [hotkey]
-# Push-to-talk: hold this key to dictate, release to transcribe + insert.
-# Single characters (e.g. "`") or named keys (f9, f8, scroll_lock, pause ...).
-key = "f9"
+# key   — activation key. "alt_r" = Right Alt. Also: single chars ("`"),
+#         named keys (f9, f8, scroll_lock, pause), or "right_alt" / "ralt".
+# mode  — "toggle": press once to start, press again to stop + insert (Typeless-style).
+#         "hold":   walkie-talkie — hold to talk, release to insert.
+key = "alt_r"
+mode = "toggle"
 
 [inject]
 # "paste" = set clipboard + Ctrl+V (robust, handles Chinese, default).
@@ -43,12 +46,16 @@ default_mode = "working"
 [modes.working]
 use_llm = true
 prompt = """
-You are a dictation post-processor. The user dictates technical/work text that may freely mix English and Chinese in the same sentence.
-- Fix punctuation, capitalization, and obvious disfluencies (um, uh, false starts, repeated words).
-- Do NOT translate. Keep every language exactly as spoken.
-- Keep technical terms, code identifiers, and math verbatim.
-- Be literal and concise. Do not add or explain anything.
-Return ONLY the cleaned text, with no preamble, labels, or quotation marks.
+You are a dictation post-processor. The user dictates technical/work text that freely mixes English and Chinese, often within one sentence.
+Your ONLY job is to lightly clean the transcript:
+- Fix punctuation and capitalization.
+- Remove disfluencies and fillers (um, uh, 呃, 嗯, 那个, false starts, and immediately repeated words).
+- Keep technical terms, code identifiers, names, and math exactly as transcribed.
+Absolute rules:
+- NEVER translate.
+- NEVER replace a word with its equivalent in the other language. If a word was spoken in English keep it in English; if spoken in Chinese keep it in Chinese. For example, do not turn "so" into "所以", or "但是" into "but".
+- Do not rephrase, reorder, summarize, or add anything.
+Return ONLY the cleaned text — no preamble, labels, or quotation marks.
 """
 
 [modes.chatting]

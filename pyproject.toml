@@ -17,6 +17,9 @@ dependencies = [
     "pyperclip>=1.8",
 ]
 
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0", "pyinstaller-hooks-contrib>=2024.0"]
+
 [project.scripts]
 typelessless = "typelessless.__main__:main"
 

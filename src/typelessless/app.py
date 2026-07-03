@@ -6,7 +6,7 @@ from . import config as config_mod
 from .audio import Microphone
 from .cleanup.claude import ClaudeCleaner
 from .cleanup.passthrough import Passthrough
-from .hotkey import PushToTalk
+from .hotkey import Hotkey
 from .inject import inject_text
 from .stt.soniox import SonioxClient
 
@@ -27,7 +27,7 @@ class App:
         self._session = None
         self._mic = None
         self._icon = None
-        self._ptt = None
+        self._hotkey = None
 
     # --- setup ----------------------------------------------------------
     def _build_backends(self) -> None:
@@ -50,13 +50,29 @@ class App:
             return self._llm
         return self._passthrough
 
-    # --- mode toggle ----------------------------------------------------
+    # --- mode + status --------------------------------------------------
     def set_mode(self, name: str) -> None:
         if name in self.cfg.modes:
             self.active_mode = name
+            self._set_status(self._recording)
             print(f"[mode] {name}")
 
-    # --- push-to-talk ---------------------------------------------------
+    def _set_status(self, recording: bool) -> None:
+        if self._icon is not None:
+            self._icon.title = (
+                "typelessless — ● recording" if recording else f"typelessless — {self.active_mode}"
+            )
+
+    # --- activation -----------------------------------------------------
+    def toggle(self) -> None:
+        """Toggle mode: press once to start, press again to stop + insert."""
+        with self._lock:
+            recording = self._recording
+        if recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
     def start_recording(self) -> None:
         with self._lock:
             if self._recording:
@@ -66,11 +82,13 @@ class App:
             self._session = self._stt.open_session(audio_format="pcm_s16le")
             self._mic = Microphone(self.cfg.sample_rate, self._session.feed)
             self._mic.start()
+            self._set_status(True)
             print("[rec] listening…")
         except Exception as exc:  # noqa: BLE001
             print(f"[rec] failed to start: {exc}")
             self._recording = False
             self._session = self._mic = None
+            self._set_status(False)
 
     def stop_recording(self) -> None:
         with self._lock:
@@ -84,30 +102,33 @@ class App:
         mic, session = self._mic, self._session
         self._mic = self._session = None
         try:
-            if mic is not None:
-                mic.stop()
-            transcript = session.finish() if session is not None else ""
-        except Exception as exc:  # noqa: BLE001
-            print(f"[stt] {exc}")
-            return
+            try:
+                if mic is not None:
+                    mic.stop()
+                transcript = session.finish() if session is not None else ""
+            except Exception as exc:  # noqa: BLE001
+                print(f"[stt] {exc}")
+                return
 
-        if not transcript:
-            print("[rec] (nothing heard)")
-            return
-        print(f"[stt] {transcript!r}")
+            if not transcript:
+                print("[rec] (nothing heard)")
+                return
+            print(f"[stt] {transcript!r}")
 
-        mode = self.cfg.modes[self.active_mode]
-        try:
-            cleaned = self._cleaner_for(mode).clean(transcript, mode, self.cfg.vocab)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[cleanup] {exc}; inserting raw transcript.")
-            cleaned = transcript
+            mode = self.cfg.modes[self.active_mode]
+            try:
+                cleaned = self._cleaner_for(mode).clean(transcript, mode, self.cfg.vocab)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[cleanup] {exc}; inserting raw transcript.")
+                cleaned = transcript
 
-        try:
-            inject_text(cleaned, self.cfg.inject_method, self.cfg.restore_clipboard)
-            print(f"[out] {cleaned!r}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[inject] {exc}")
+            try:
+                inject_text(cleaned, self.cfg.inject_method, self.cfg.restore_clipboard)
+                print(f"[out] {cleaned!r}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[inject] {exc}")
+        finally:
+            self._set_status(False)
 
     # --- lifecycle ------------------------------------------------------
     def reload(self) -> None:
@@ -117,24 +138,33 @@ class App:
             if self.active_mode not in self.cfg.modes:
                 self.active_mode = self.cfg.default_mode
             self._build_backends()
+            self._set_status(self._recording)
             print("[config] reloaded")
         except Exception as exc:  # noqa: BLE001
             print(f"[config] reload failed: {exc}")
 
     def quit(self) -> None:
-        if self._ptt is not None:
-            self._ptt.stop()
+        if self._hotkey is not None:
+            self._hotkey.stop()
         if self._icon is not None:
             self._icon.stop()
 
     def run(self) -> None:
         from .tray import make_icon
 
-        self._ptt = PushToTalk(self.cfg.hotkey, self.start_recording, self.stop_recording)
-        self._ptt.start()
-        print(
-            f"typelessless running. Hold [{self.cfg.hotkey}] to dictate; "
-            f"release to insert. Mode: {self.active_mode}. (tray icon → toggle/quit)"
-        )
+        if self.cfg.hotkey_mode == "hold":
+            self._hotkey = Hotkey(
+                self.cfg.hotkey,
+                "hold",
+                on_start=self.start_recording,
+                on_stop=self.stop_recording,
+            )
+            how = f"Hold [{self.cfg.hotkey}] to talk, release to insert"
+        else:
+            self._hotkey = Hotkey(self.cfg.hotkey, "toggle", on_toggle=self.toggle)
+            how = f"Press [{self.cfg.hotkey}] to start, press again to stop + insert"
+
+        self._hotkey.start()
+        print(f"typelessless running. {how}. Mode: {self.active_mode}. (tray → mode/quit)")
         self._icon = make_icon(self)
         self._icon.run()  # blocks on the main thread until Quit

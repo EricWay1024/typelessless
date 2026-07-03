@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ class Config:
     sample_rate: int
     language_hints: list[str]
     hotkey: str
+    hotkey_mode: str
     inject_method: str
     restore_clipboard: bool
     vocab: list[str]
@@ -28,6 +30,8 @@ def _candidates(explicit: str | None) -> list[Path]:
     out: list[Path] = []
     if explicit:
         out.append(Path(explicit))
+    if getattr(sys, "frozen", False):  # running as a bundled .exe → look next to it
+        out.append(Path(sys.executable).resolve().parent / "config.toml")
     out.append(Path.cwd() / "config.toml")
     out.append(Path(__file__).resolve().parents[2] / "config.toml")
     out.append(Path.home() / ".config" / "typelessless" / "config.toml")
@@ -78,6 +82,7 @@ def load(path: str | None = None) -> Config:
         sample_rate=int(stt.get("sample_rate", 16000)),
         language_hints=list(stt.get("language_hints", ["en", "zh"])),
         hotkey=str(hotkey.get("key", "f9")),
+        hotkey_mode=str(hotkey.get("mode", "toggle")),
         inject_method=inject.get("method", "paste"),
         restore_clipboard=bool(inject.get("restore_clipboard", True)),
         vocab=vocab,
