@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "typelessless"
+version = "0.1.0"
+description = "Self-owned push-to-talk dictation with 中/英 code-switching (Soniox STT + Claude cleanup)."
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "websockets>=12",
+    "sounddevice>=0.4.6",
+    "pynput>=1.7",
+    "pystray>=0.19",
+    "pillow>=10",
+    "pyperclip>=1.8",
+]
+
+[project.scripts]
+typelessless = "typelessless.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

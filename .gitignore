@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+config.toml
+# personal/test audio — keep recordings out of git
+*.wav
+*.m4a
+*.mp3
+*:Zone.Identifier
+*.egg-info/
+build/
+dist/
+.DS_Store

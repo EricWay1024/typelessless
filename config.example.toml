@@ -1,0 +1,61 @@
+# Copy this file to `config.toml` and fill in your keys.
+# Anything left blank falls back to an environment variable.
+
+[keys]
+# Get a Soniox key at https://console.soniox.com  (falls back to $SONIOX_API_KEY)
+soniox = ""
+# Anthropic key for cleanup (falls back to $ANTHROPIC_API_KEY). Leave blank to
+# disable LLM cleanup entirely and use raw transcripts.
+anthropic = ""
+
+[stt]
+model = "stt-rt-v5"
+sample_rate = 16000
+# Bias the recognizer toward these languages. This is what makes mid-sentence
+# 中/英 switching work. Add more as needed.
+language_hints = ["en", "zh"]
+
+[hotkey]
+# Push-to-talk: hold this key to dictate, release to transcribe + insert.
+# Single characters (e.g. "`") or named keys (f9, f8, scroll_lock, pause ...).
+key = "f9"
+
+[inject]
+# "paste" = set clipboard + Ctrl+V (robust, handles Chinese, default).
+# "type"  = synthesize Unicode keystrokes (use if an app blocks paste).
+method = "paste"
+restore_clipboard = true
+
+[vocab]
+# Terms that bias STT recognition AND are used to normalize spelling in cleanup.
+# Put names, jargon, and math/technical vocabulary here.
+terms = [
+    "manifold", "eigenvalue", "Navier-Stokes", "Riemannian",
+    "Hörmander", "Sobolev", "quasilinear", "typelessless",
+]
+
+[cleanup]
+model = "claude-haiku-4-5"
+default_mode = "working"
+
+# --- Modes: toggle from the tray icon. Each has its own cleanup prompt. ---
+
+[modes.working]
+use_llm = true
+prompt = """
+You are a dictation post-processor. The user dictates technical/work text that may freely mix English and Chinese in the same sentence.
+- Fix punctuation, capitalization, and obvious disfluencies (um, uh, false starts, repeated words).
+- Do NOT translate. Keep every language exactly as spoken.
+- Keep technical terms, code identifiers, and math verbatim.
+- Be literal and concise. Do not add or explain anything.
+Return ONLY the cleaned text, with no preamble, labels, or quotation marks.
+"""
+
+[modes.chatting]
+use_llm = true
+prompt = """
+You are a dictation post-processor for casual chat and messages that may mix English and Chinese.
+- Lightly fix punctuation and drop filler words, but keep the natural, casual tone.
+- Do NOT translate. Keep each language as spoken.
+Return ONLY the cleaned message text, with no preamble or quotation marks.
+"""
