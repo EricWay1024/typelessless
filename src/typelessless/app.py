@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import array
 import threading
+from collections import deque
 
 from . import config as config_mod
 from . import dictlog, history, startup
@@ -30,6 +32,7 @@ class App:
         self._session = None
         self._mic = None
         self._audio_buf = bytearray()
+        self._levels: deque = deque(maxlen=48)  # recent audio levels for the waveform
         self._icon = None
         self._hotkey = None
         self._overlay = None
@@ -87,9 +90,30 @@ class App:
 
     def _feed_audio(self, pcm: bytes) -> None:
         self._audio_buf.extend(pcm)  # keep a copy so the recording is never lost
+        self._push_level(pcm)
         session = self._session
         if session is not None:
             session.feed(pcm)
+
+    def _push_level(self, pcm: bytes) -> None:
+        try:
+            a = array.array("h")
+            a.frombytes(pcm if len(pcm) % 2 == 0 else pcm[:-1])
+            if not a:
+                return
+            step = max(1, len(a) // 800)  # subsample to bound cost
+            total = count = 0
+            for i in range(0, len(a), step):
+                v = a[i]
+                total += v * v
+                count += 1
+            rms = (total / count) ** 0.5 / 32768.0
+            self._levels.append(min(1.0, rms * 6.0))
+        except Exception:
+            pass
+
+    def audio_levels(self) -> list:
+        return list(self._levels)
 
     def start_recording(self) -> None:
         with self._lock:
@@ -98,6 +122,7 @@ class App:
             self._recording = True
         try:
             self._audio_buf = bytearray()
+            self._levels.clear()
             self._session = self._stt.open_session(audio_format="pcm_s16le")
             self._mic = Microphone(self.cfg.sample_rate, self._feed_audio)
             self._mic.start()
@@ -269,7 +294,7 @@ class App:
     def run(self) -> None:
         from .tray import make_icon
 
-        self._overlay = StatusOverlay(self.status, self._stop_event)
+        self._overlay = StatusOverlay(self.status, self.audio_levels, self._stop_event)
         self._overlay.start()
 
         try:
