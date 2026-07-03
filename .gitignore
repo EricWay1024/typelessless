@@ -12,3 +12,4 @@ config.toml
 build/
 dist/
 .DS_Store
+_winbuild.ps1
