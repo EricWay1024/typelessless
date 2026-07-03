@@ -13,3 +13,4 @@ build/
 dist/
 .DS_Store
 _*.ps1
+test2
