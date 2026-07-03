@@ -63,7 +63,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,  # shows a log window; set False and rebuild once you trust it
+    console=False,  # windowed app — no console; logs go to %APPDATA%\typelessless\
     disable_windowed_traceback=False,
     icon=None,
 )

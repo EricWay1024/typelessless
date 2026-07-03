@@ -3,16 +3,33 @@ from __future__ import annotations
 import sys
 
 
+def _setup_windows_output() -> None:
+    """Make prints safe and readable on Windows. In a windowed (console=False)
+    frozen build, sys.stdout/stderr are None and any print() would crash — so
+    tee them to a debug log. Otherwise just force UTF-8 for 中文 logs."""
+    if sys.platform != "win32":
+        return
+    if sys.stdout is None or sys.stderr is None:
+        try:
+            from typelessless.dictlog import log_dir
+
+            fh = open(log_dir() / "debug.log", "a", encoding="utf-8", buffering=1)
+            if sys.stdout is None:
+                sys.stdout = fh
+            if sys.stderr is None:
+                sys.stderr = fh
+        except Exception:
+            pass
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
 def main() -> None:
-    # On Windows the console defaults to a non-UTF-8 code page, which renders
-    # dictated 中文 in the log as mojibake. Force UTF-8 for readable logs.
-    if sys.platform == "win32":
-        for stream in (sys.stdout, sys.stderr):
-            try:
-                if stream is not None:
-                    stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+    _setup_windows_output()
 
     args = sys.argv[1:]
 

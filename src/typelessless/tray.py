@@ -26,6 +26,12 @@ def make_icon(app):
     items = [mode_item(n) for n in app.modes]
     items += [
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Open log", lambda icon, item: app.open_log()),
+        pystray.MenuItem(
+            "Start on login",
+            lambda icon, item: app.toggle_startup(),
+            checked=lambda item: app.startup_enabled(),
+        ),
         pystray.MenuItem("Reload config", lambda icon, item: app.reload()),
         pystray.MenuItem("Quit", lambda icon, item: app.quit()),
     ]
