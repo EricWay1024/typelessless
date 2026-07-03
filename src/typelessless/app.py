@@ -22,10 +22,10 @@ class App:
         # User-editable settings (modes / prompts / vocab / rules), seeded from
         # config.toml on first run, then owned by the Settings web UI.
         seed = {
-            "global_prompt": "",
+            "global_prompt": settings.DEFAULT_GLOBAL_PROMPT,
             "vocab": list(cfg.vocab),
             "default_mode": cfg.default_mode,
-            "modes": [{"name": n, "prompt": m.prompt, "use_llm": m.use_llm} for n, m in cfg.modes.items()],
+            "modes": settings.DEFAULT_MODES,
             "rules": [],
         }
         self.active_mode = cfg.default_mode
