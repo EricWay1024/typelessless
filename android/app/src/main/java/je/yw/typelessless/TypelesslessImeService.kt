@@ -102,7 +102,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         controlsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setPadding(dp(10), 0, dp(10), 0)
         }
         modeChip = Button(this).apply {
             text = activeMode
@@ -115,6 +115,8 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
             }
             minWidth = 0
             minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
             setPadding(dp(18), dp(6), dp(18), dp(6))
             setOnClickListener { cycleMode() }
         }
@@ -133,7 +135,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
-            setPadding(dp(6), dp(2), dp(6), dp(2))
+            setPadding(dp(6), 0, dp(6), 0)
         }
         for (i in 0 until 3) {
             val tv = TextView(this).apply {
@@ -142,18 +144,26 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
                 textSize = 15f
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
-                setPadding(dp(6), dp(10), dp(6), dp(10))
+                setPadding(dp(6), 0, dp(6), 0)
                 isClickable = true
                 setOnClickListener { onCandidate(i) }
             }
             candViews.add(tv)
-            suggestionRow.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            // fill the strip height so each candidate is a full-height tap target
+            suggestionRow.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }
 
+        // Fixed-height strip so it doesn't resize when swapping controls <-> suggestions.
         val topStrip = FrameLayout(this)
-        topStrip.addView(controlsRow)
-        topStrip.addView(suggestionRow)
-        root.addView(topStrip)
+        topStrip.addView(
+            controlsRow,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT),
+        )
+        topStrip.addView(
+            suggestionRow,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT),
+        )
+        root.addView(topStrip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
 
         // --- content: keyboard, swapped for the transcript while recording ---
         val content = FrameLayout(this)
