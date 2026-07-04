@@ -31,6 +31,7 @@ class ClaudeCleaner(Cleaner):
         resp = self._client.messages.create(
             model=self._model,
             max_tokens=2048,
+            temperature=0,  # cleanup is a deterministic transform; curbs no-translate drift
             system=[
                 {
                     "type": "text",
@@ -38,7 +39,9 @@ class ClaudeCleaner(Cleaner):
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            messages=[{"role": "user", "content": text}],
+            # Wrap the transcript so the model treats it strictly as data, not as
+            # instructions addressed to it (see the global prompt's <transcript> rule).
+            messages=[{"role": "user", "content": f"<transcript>\n{text}\n</transcript>"}],
         )
         out = "".join(b.text for b in resp.content if b.type == "text").strip()
         return out or text
