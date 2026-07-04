@@ -22,6 +22,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -43,11 +44,15 @@ import java.util.concurrent.Executors
  */
 class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActionListener {
 
-    private enum class State { IDLE, RECORDING, PROCESSING }
+    private enum class State { IDLE, RECORDING, REVIEW, PROCESSING }
 
     // dictation UI
     private lateinit var status: TextView
     private lateinit var scroller: ScrollView
+    private lateinit var dictationView: LinearLayout
+    private lateinit var reviewBar: LinearLayout
+    private lateinit var modeButtonsRow: LinearLayout
+    private var rawTranscript = ""
     private lateinit var mic: ImageView
     private lateinit var modeChip: Button
 
@@ -185,15 +190,60 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
             gravity = Gravity.TOP
             setPadding(dp(14), dp(10), dp(14), dp(10))
         }
-        scroller = ScrollView(this).apply {
+        scroller = ScrollView(this).apply { addView(status) }
+
+        // Review action bar (shown after recording): insert-as-is + a chip per mode.
+        reviewBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
-            addView(status)
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                qwerty.height, // match the keyboard's height so nothing jumps
+            setBackgroundColor(BG)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        val insertBtn = Button(this).apply {
+            text = "⬆ 原文"
+            textSize = 13f
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(Color.parseColor("#2E7D32")) // green = send as-is
+            }
+            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            setOnClickListener { onInsertRaw() }
+        }
+        reviewBar.addView(
+            insertBtn,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(6) },
+        )
+        modeButtonsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        reviewBar.addView(
+            HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(modeButtonsRow)
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+
+        // Panel that swaps in for the keyboard while dictating: transcript + review bar.
+        dictationView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(scroller, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(
+                reviewBar,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
             )
         }
-        content.addView(scroller)
+        content.addView(
+            dictationView,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, qwerty.height),
+        )
         root.addView(content)
 
         return root
@@ -554,6 +604,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         when (state) {
             State.PROCESSING -> Unit
             State.RECORDING -> stopRecording()
+            State.REVIEW -> startRecording() // discard the pending review and re-record
             State.IDLE -> {
                 if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
                     PackageManager.PERMISSION_GRANTED
@@ -595,33 +646,98 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
     }
 
     private fun stopRecording() {
-        state = State.PROCESSING
+        state = State.PROCESSING // finalizing the transcript
         setMicBg(PROC)
-        showStatus("Cleaning…")
+        showStatus("Finalizing…")
 
         val c = capture; capture = null
         val s = session; session = null
         c?.stop()
 
-        val mode = settings.modeByName(activeMode)
-        val anthropicKey = keys.anthropic()
-
         work.execute {
             try {
                 val transcript = s?.finish(20L).orEmpty()
-                if (transcript.isBlank()) { main.post { resetIdle() }; return@execute }
+                main.post {
+                    if (transcript.isBlank()) { resetIdle(); return@post }
+                    rawTranscript = transcript
+                    enterReview(transcript)
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "dictation failed", e)
+                main.post { fail("Error: ${e.message}") }
+            }
+        }
+    }
+
+    /** After recording: show the raw transcript and let the user choose what to do with it. */
+    private fun enterReview(text: String) {
+        state = State.REVIEW
+        setMicBg(null)
+        status.setTextColor(Color.WHITE)
+        showStatus(text)
+        buildModeButtons()
+        reviewBar.visibility = View.VISIBLE
+    }
+
+    private fun buildModeButtons() {
+        modeButtonsRow.removeAllViews()
+        for (m in settings.modes) {
+            val name = m.name
+            modeButtonsRow.addView(reviewChip(name, name == activeMode) { onCleanWithMode(name) })
+        }
+    }
+
+    private fun reviewChip(label: String, active: Boolean, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = 13f
+            isAllCaps = false
+            setTextColor(if (active) Color.WHITE else Color.parseColor("#CCCCCC"))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(Color.parseColor(if (active) "#3A6EA5" else "#3A3A3C"))
+            }
+            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = dp(3); marginEnd = dp(3) }
+            setOnClickListener { onClick() }
+        }
+
+    /** Insert the raw transcript unchanged (skip the LLM). */
+    private fun onInsertRaw() {
+        if (state != State.REVIEW) return
+        currentInputConnection?.commitText(rawTranscript, 1)
+        resetIdle()
+    }
+
+    /** Clean the raw transcript with the chosen mode, then insert. */
+    private fun onCleanWithMode(name: String) {
+        if (state != State.REVIEW) return
+        activeMode = name
+        updateModeChip()
+        state = State.PROCESSING
+        reviewBar.visibility = View.GONE
+        showStatus("Cleaning…")
+
+        val mode = settings.modeByName(name)
+        val anthropicKey = keys.anthropic()
+        val text = rawTranscript
+        work.execute {
+            try {
                 val cleaned = if (mode == null || !mode.useLlm || anthropicKey.isEmpty()) {
-                    transcript
+                    text
                 } else {
                     ClaudeCleaner(anthropicKey)
-                        .clean(transcript, Prompts.system(settings.globalPrompt, mode.prompt, settings.vocab))
+                        .clean(text, Prompts.system(settings.globalPrompt, mode.prompt, settings.vocab))
                 }
                 main.post {
                     currentInputConnection?.commitText(cleaned, 1)
                     resetIdle()
                 }
             } catch (e: Throwable) {
-                Log.e(TAG, "dictation failed", e)
+                Log.e(TAG, "clean failed", e)
                 main.post { fail("Error: ${e.message}") }
             }
         }
@@ -639,6 +755,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         session?.cancel(); session = null
         state = State.IDLE
         setMicBg(null)
+        if (::reviewBar.isInitialized) reviewBar.visibility = View.GONE
         status.setTextColor(Color.parseColor("#FF8A80"))
         showStatus(msg)
     }
@@ -647,12 +764,14 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
 
     private fun showKeyboard() {
         if (::keyboardView.isInitialized) keyboardView.visibility = View.VISIBLE
-        if (::scroller.isInitialized) scroller.visibility = View.GONE
+        if (::dictationView.isInitialized) dictationView.visibility = View.GONE
+        if (::reviewBar.isInitialized) reviewBar.visibility = View.GONE
     }
 
     private fun showTranscript() {
         if (::keyboardView.isInitialized) keyboardView.visibility = View.GONE
-        if (::scroller.isInitialized) scroller.visibility = View.VISIBLE
+        if (::dictationView.isInitialized) dictationView.visibility = View.VISIBLE
+        if (::reviewBar.isInitialized) reviewBar.visibility = View.GONE
         status.setTextColor(Color.WHITE)
     }
 
