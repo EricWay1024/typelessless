@@ -22,7 +22,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -51,7 +50,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
     private lateinit var scroller: ScrollView
     private lateinit var dictationView: LinearLayout
     private lateinit var reviewBar: LinearLayout
-    private lateinit var modeButtonsRow: LinearLayout
+    private lateinit var cleanBtn: Button
     private var rawTranscript = ""
     private lateinit var mic: ImageView
     private lateinit var modeChip: Button
@@ -68,6 +67,8 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
 
     // suggestions / composing
     private val suggest = SuggestionEngine()
+    private val suggestExecutor = Executors.newSingleThreadExecutor()
+    private var suggestSeq = 0
     private val composing = StringBuilder()
     private var currentSuggestion: SuggestionEngine.Result? = null
     private var phantomSpace = false // a trailing auto-space that punctuation may absorb
@@ -200,33 +201,31 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
             setBackgroundColor(BG)
             setPadding(dp(8), dp(6), dp(8), dp(6))
         }
-        val insertBtn = Button(this).apply {
-            text = "⬆ 原文"
-            textSize = 13f
+        // Two big buttons: insert-as-is (green) and clean-with-current-mode (blue),
+        // plus a ⋮ overflow for the other modes.
+        reviewBar.addView(
+            bigReviewButton("⬆ 原文", "#2E7D32") { onInsertRaw() },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
+        )
+        cleanBtn = bigReviewButton(activeMode, "#3A6EA5") { onCleanWithMode(activeMode) }
+        reviewBar.addView(
+            cleanBtn,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) },
+        )
+        val moreBtn = Button(this).apply {
+            text = "⋮"
+            textSize = 18f
             isAllCaps = false
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(Color.parseColor("#2E7D32")) // green = send as-is
+                cornerRadius = dp(18).toFloat()
+                setColor(Color.parseColor("#3A3A3C"))
             }
-            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-            setOnClickListener { onInsertRaw() }
+            minWidth = 0; minimumWidth = 0; minimumHeight = dp(44)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
         }
-        reviewBar.addView(
-            insertBtn,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { marginEnd = dp(6) },
-        )
-        modeButtonsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        reviewBar.addView(
-            HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-                addView(modeButtonsRow)
-            },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
-        )
+        moreBtn.setOnClickListener { showModeMenu(moreBtn) }
+        reviewBar.addView(moreBtn)
 
         // Panel that swaps in for the keyboard while dictating: transcript + review bar.
         dictationView = LinearLayout(this).apply {
@@ -371,9 +370,10 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         var r = 0
         while (r < after.length && isWordChar(after[r])) r++
         val word = before.substring(l) + after.substring(0, r)
-        if (word.isEmpty() || word.length > 40) {
-            // Cursor isn't on a word (e.g. right after our own commit) — don't touch
-            // phantomSpace here, or we'd clobber it before the next keystroke.
+        // Only recompose when the caret is at the END of an English word (r == 0).
+        // Mid-word (r > 0), or Chinese / no ASCII letters -> leave it as free-editable
+        // text (don't touch phantomSpace here; it must survive to the next keystroke).
+        if (r > 0 || word.isEmpty() || word.length > 40) {
             if (composing.isNotEmpty()) { ic.finishComposingText(); composing.setLength(0) }
             clearSuggestions()
             return
@@ -385,7 +385,9 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         updateSuggestions()
     }
 
-    private fun isWordChar(c: Char): Boolean = Character.isLetter(c)
+    // Only ASCII letters form a composed/suggested word. Chinese (and other
+    // scripts) are never composed — edit them freely like a normal field.
+    private fun isWordChar(c: Char): Boolean = c in 'a'..'z' || c in 'A'..'Z'
 
     private fun handleDelete(ic: android.view.inputmethod.InputConnection) {
         if (composing.isNotEmpty()) {
@@ -413,7 +415,8 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         try {
             // Finish the current word (autocorrecting if strong), then a revocable auto-space.
             if (composing.isNotEmpty()) {
-                currentSuggestion?.autoCorrect?.let { ic.setComposingText(it, 1) }
+                // Compute synchronously here (rare event) so autocorrect is always current.
+                suggest.suggest(composing.toString()).autoCorrect?.let { ic.setComposingText(it, 1) }
                 ic.finishComposingText()
                 composing.setLength(0)
                 clearSuggestions()
@@ -456,9 +459,17 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         if (!::suggestionRow.isInitialized) return
         val word = composing.toString()
         if (word.isEmpty()) { clearSuggestions(); return }
-        val res = suggest.suggest(word)
-        currentSuggestion = res
-        if (res.candidates.size >= 2 || res.autoCorrect != null) showSuggestions(res) else clearSuggestions()
+        // Compute off the main thread so fast typing never stutters; only the
+        // latest keystroke's result is applied.
+        val seq = ++suggestSeq
+        suggestExecutor.execute {
+            val res = suggest.suggest(word)
+            main.post {
+                if (seq != suggestSeq) return@post
+                currentSuggestion = res
+                if (res.candidates.size >= 2 || res.autoCorrect != null) showSuggestions(res) else clearSuggestions()
+            }
+        }
     }
 
     private fun showSuggestions(res: SuggestionEngine.Result) {
@@ -675,35 +686,35 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         setMicBg(null)
         status.setTextColor(Color.WHITE)
         showStatus(text)
-        buildModeButtons()
+        if (::cleanBtn.isInitialized) cleanBtn.text = activeMode
         reviewBar.visibility = View.VISIBLE
     }
 
-    private fun buildModeButtons() {
-        modeButtonsRow.removeAllViews()
-        for (m in settings.modes) {
-            val name = m.name
-            modeButtonsRow.addView(reviewChip(name, name == activeMode) { onCleanWithMode(name) })
-        }
-    }
-
-    private fun reviewChip(label: String, active: Boolean, onClick: () -> Unit): Button =
+    private fun bigReviewButton(label: String, colorHex: String, onClick: () -> Unit): Button =
         Button(this).apply {
             text = label
-            textSize = 13f
+            textSize = 15f
             isAllCaps = false
-            setTextColor(if (active) Color.WHITE else Color.parseColor("#CCCCCC"))
+            setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(Color.parseColor(if (active) "#3A6EA5" else "#3A3A3C"))
+                cornerRadius = dp(18).toFloat()
+                setColor(Color.parseColor(colorHex))
             }
-            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { marginStart = dp(3); marginEnd = dp(3) }
+            minWidth = 0; minimumWidth = 0; minimumHeight = dp(46)
+            setPadding(dp(8), dp(10), dp(8), dp(10))
             setOnClickListener { onClick() }
         }
+
+    /** Overflow: pick one of the other modes to clean with. */
+    private fun showModeMenu(anchor: View) {
+        val menu = android.widget.PopupMenu(this, anchor)
+        for (m in settings.modes) menu.menu.add(m.name)
+        menu.setOnMenuItemClickListener { item ->
+            onCleanWithMode(item.title.toString())
+            true
+        }
+        menu.show()
+    }
 
     /** Insert the raw transcript unchanged (skip the LLM). */
     private fun onInsertRaw() {
@@ -812,6 +823,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         capture?.stop()
         session?.cancel()
         work.shutdownNow()
+        suggestExecutor.shutdownNow()
         super.onDestroy()
     }
 
