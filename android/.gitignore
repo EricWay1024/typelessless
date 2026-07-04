@@ -1,5 +1,6 @@
 # Android / Gradle build artifacts and machine-specific files
 /local.properties
+/.apk_dest
 /.gradle
 /.kotlin
 /build

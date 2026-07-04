@@ -12,6 +12,18 @@ ADB="$SDK/platform-tools/adb"
 APK="$AND/app/build/outputs/apk/debug/app-debug.apk"
 echo "APK: $APK"
 
+# Optional deploy: copy the APK to a destination folder (e.g. a synced Drive).
+# Put the Windows destination directory in android/.apk_dest (gitignored) to enable.
+if [ -f "$AND/.apk_dest" ] && command -v wslpath >/dev/null 2>&1; then
+    DEST_DIR="$(head -n1 "$AND/.apk_dest" | tr -d '\r\n')"
+    if [ -n "$DEST_DIR" ]; then
+        PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        "$PS" -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$DEST_DIR' | Out-Null; Copy-Item -LiteralPath '$(wslpath -w "$APK")' -Destination (Join-Path '$DEST_DIR' 'typelessless.apk') -Force" >/dev/null 2>&1 \
+            && echo "Deployed -> $DEST_DIR\\typelessless.apk" \
+            || echo "Deploy to $DEST_DIR failed (skipped)."
+    fi
+fi
+
 if [ "${1:-}" = "build" ]; then
     exit 0
 fi
