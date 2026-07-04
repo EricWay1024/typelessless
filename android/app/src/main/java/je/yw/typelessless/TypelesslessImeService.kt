@@ -340,20 +340,22 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
     private fun handleDelete(ic: android.view.inputmethod.InputConnection) {
         if (composing.isNotEmpty()) {
             composing.setLength(composing.length - 1)
+            // Update the field first (this removes the last char even when now empty);
+            // only THEN finish, or finishComposingText would re-commit that last letter.
+            ic.setComposingText(composing, 1)
             if (composing.isEmpty()) {
                 ic.finishComposingText()
                 clearSuggestions()
                 updateAutoCaps()
             } else {
-                ic.setComposingText(composing, 1)
                 updateSuggestions()
             }
-        } else {
-            phantomSpace = false
-            val sel = ic.getSelectedText(0)
-            if (!sel.isNullOrEmpty()) ic.commitText("", 1) else ic.deleteSurroundingText(1, 0)
-            updateAutoCaps()
+            return
         }
+        phantomSpace = false
+        val sel = ic.getSelectedText(0)
+        if (!sel.isNullOrEmpty()) ic.commitText("", 1) else ic.deleteSurroundingText(1, 0)
+        updateAutoCaps()
     }
 
     private fun handleSpace(ic: android.view.inputmethod.InputConnection) {
