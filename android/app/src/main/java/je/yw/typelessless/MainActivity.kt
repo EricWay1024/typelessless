@@ -31,6 +31,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Test/launcher screen: keep the display on while it's open (handy on the test phone).
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
