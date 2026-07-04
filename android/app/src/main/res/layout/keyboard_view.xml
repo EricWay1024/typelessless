@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<je.yw.typelessless.LatinKeyboardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/keyboard_view"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#1E1E1E"
+    android:keyBackground="@drawable/key_background"
+    android:keyTextColor="#FFFFFF"
+    android:keyTextSize="21sp"
+    android:labelTextSize="15sp"
+    android:popupLayout="@layout/keyboard_popup"
+    android:shadowRadius="0"
+    android:verticalCorrection="0dp" />

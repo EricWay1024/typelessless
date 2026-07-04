@@ -13,4 +13,5 @@ build/
 dist/
 .DS_Store
 _*.ps1
+/_android_build.log
 test2

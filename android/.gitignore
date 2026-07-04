@@ -1,0 +1,12 @@
+# Android / Gradle build artifacts and machine-specific files
+/local.properties
+/.gradle
+/.kotlin
+/build
+/app/build
+/captures
+*.iml
+/.idea
+.DS_Store
+# Generated at build time from ../shared/defaults.json (single source of truth)
+/app/src/main/assets/defaults.json
