@@ -65,6 +65,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
     private val suggest = SuggestionEngine()
     private val composing = StringBuilder()
     private var currentSuggestion: SuggestionEngine.Result? = null
+    private var phantomSpace = false // a trailing auto-space that punctuation may absorb
     private lateinit var controlsRow: LinearLayout
     private lateinit var suggestionRow: LinearLayout
     private val candViews = ArrayList<TextView>(3)
@@ -202,6 +203,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         super.onStartInputView(editorInfo, restarting)
         settings = store.load()
         composing.setLength(0)
+        phantomSpace = false
         clearSuggestions()
         if (state == State.IDLE) {
             activeMode = settings.pickMode(editorInfo.packageName)
@@ -221,6 +223,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
 
     override fun onFinishInput() {
         composing.setLength(0)
+        phantomSpace = false
         clearSuggestions()
         super.onFinishInput()
     }
@@ -236,11 +239,21 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
         )
-        // The composing region was dropped (cursor moved away); reset our state.
-        if (composing.isNotEmpty() && candidatesStart == -1) {
-            composing.setLength(0)
-            clearSuggestions()
+        if (state != State.IDLE || symbolsShown) return
+        // A range selection isn't a word to compose.
+        if (newSelStart != newSelEnd) {
+            if (composing.isNotEmpty()) {
+                currentInputConnection?.finishComposingText()
+                composing.setLength(0)
+                clearSuggestions()
+            }
+            return
         }
+        // Caret still inside our composing region -> it's our own typing; ignore.
+        if (candidatesStart >= 0 && newSelStart in candidatesStart..candidatesEnd) return
+        // The user moved the caret: re-compose the whole word now at the cursor so
+        // editing extends the existing word (recorrection, AOSP-style).
+        reconstructWordAtCursor(newSelStart)
     }
 
     // --- typing (KeyboardView.OnKeyboardActionListener) ------------------
@@ -256,6 +269,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
             32 -> handleSpace(ic)
             else -> {
                 if (Character.isLetter(primaryCode)) {
+                    phantomSpace = false // a following letter turns any auto-space into a real one
                     val ch = if (shifted || capsLock) {
                         Character.toUpperCase(primaryCode).toChar()
                     } else {
@@ -266,13 +280,62 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
                     if (shifted && !capsLock) { shifted = false; applyShift() }
                     updateSuggestions()
                 } else {
-                    finishComposing(ic)
-                    ic.commitText(primaryCode.toChar().toString(), 1)
-                    updateAutoCaps()
+                    handleSeparator(ic, primaryCode.toChar())
                 }
             }
         }
     }
+
+    /** Commit a punctuation/symbol with smart spacing around the phantom space. */
+    private fun handleSeparator(ic: android.view.inputmethod.InputConnection, ch: Char) {
+        ic.beginBatchEdit()
+        if (composing.isNotEmpty()) {
+            ic.finishComposingText()
+            composing.setLength(0)
+            clearSuggestions()
+        }
+        val prev = ic.getTextBeforeCursor(1, 0)?.lastOrNull()
+        val isDecimal = (ch == '.' || ch == ',') && prev != null && Character.isDigit(prev)
+        // Punctuation not usually preceded by a space absorbs a revocable auto-space.
+        if (phantomSpace && ch in SPACE_EATERS && !isDecimal) {
+            ic.deleteSurroundingText(1, 0)
+        }
+        phantomSpace = false
+        ic.commitText(ch.toString(), 1)
+        // Auto-space after sentence/clause punctuation (but not inside numbers).
+        if (ch in AUTO_SPACE_AFTER && !isDecimal) {
+            ic.commitText(" ", 1)
+            phantomSpace = true
+        }
+        ic.endBatchEdit()
+        updateAutoCaps()
+    }
+
+    /** Re-establish the whole word at the caret as the composing region (recorrection). */
+    private fun reconstructWordAtCursor(cursor: Int) {
+        val ic = currentInputConnection ?: return
+        val before = ic.getTextBeforeCursor(48, 0) ?: ""
+        val after = ic.getTextAfterCursor(48, 0) ?: ""
+        var l = before.length
+        while (l > 0 && isWordChar(before[l - 1])) l--
+        var r = 0
+        while (r < after.length && isWordChar(after[r])) r++
+        val word = before.substring(l) + after.substring(0, r)
+        if (word.isEmpty() || word.length > 40) {
+            // Cursor isn't on a word (e.g. right after our own commit) — don't touch
+            // phantomSpace here, or we'd clobber it before the next keystroke.
+            if (composing.isNotEmpty()) { ic.finishComposingText(); composing.setLength(0) }
+            clearSuggestions()
+            return
+        }
+        phantomSpace = false // now actively editing a specific word
+        composing.setLength(0)
+        composing.append(word)
+        ic.setComposingRegion(cursor - (before.length - l), cursor + r)
+        updateSuggestions()
+    }
+
+    private fun isWordChar(c: Char): Boolean = Character.isLetter(c)
 
     private fun handleDelete(ic: android.view.inputmethod.InputConnection) {
         if (composing.isNotEmpty()) {
@@ -286,6 +349,7 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
                 updateSuggestions()
             }
         } else {
+            phantomSpace = false
             val sel = ic.getSelectedText(0)
             if (!sel.isNullOrEmpty()) ic.commitText("", 1) else ic.deleteSurroundingText(1, 0)
             updateAutoCaps()
@@ -293,31 +357,45 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
     }
 
     private fun handleSpace(ic: android.view.inputmethod.InputConnection) {
-        // Finish the current word (autocorrecting if we have a strong suggestion).
-        if (composing.isNotEmpty()) {
-            currentSuggestion?.autoCorrect?.let { ic.setComposingText(it, 1) }
-            ic.finishComposingText()
-            composing.setLength(0)
-            clearSuggestions()
-            ic.commitText(" ", 1)
-            lastSpaceTime = SystemClock.uptimeMillis()
+        ic.beginBatchEdit()
+        try {
+            // Finish the current word (autocorrecting if strong), then a revocable auto-space.
+            if (composing.isNotEmpty()) {
+                currentSuggestion?.autoCorrect?.let { ic.setComposingText(it, 1) }
+                ic.finishComposingText()
+                composing.setLength(0)
+                clearSuggestions()
+                ic.commitText(" ", 1)
+                phantomSpace = true
+                lastSpaceTime = SystemClock.uptimeMillis()
+                updateAutoCaps()
+                return
+            }
+            // No word in progress: don't double an existing auto-space.
+            if (phantomSpace) {
+                phantomSpace = false
+                lastSpaceTime = SystemClock.uptimeMillis()
+                return
+            }
+            // Double-space inserts ". " (Gboard behavior).
+            val now = SystemClock.uptimeMillis()
+            val before = ic.getTextBeforeCursor(2, 0)
+            if (now - lastSpaceTime < 400 && before != null && before.length == 2 &&
+                before[1] == ' ' && Character.isLetterOrDigit(before[0])
+            ) {
+                ic.deleteSurroundingText(1, 0)
+                ic.commitText(". ", 1)
+                phantomSpace = true
+                lastSpaceTime = 0
+            } else {
+                ic.commitText(" ", 1)
+                phantomSpace = false
+                lastSpaceTime = now
+            }
             updateAutoCaps()
-            return
+        } finally {
+            ic.endBatchEdit()
         }
-        // No word in progress: double-space inserts ". " (Gboard behavior).
-        val now = SystemClock.uptimeMillis()
-        val before = ic.getTextBeforeCursor(2, 0)
-        if (now - lastSpaceTime < 400 && before != null && before.length == 2 &&
-            before[1] == ' ' && Character.isLetterOrDigit(before[0])
-        ) {
-            ic.deleteSurroundingText(1, 0)
-            ic.commitText(". ", 1)
-            lastSpaceTime = 0
-        } else {
-            ic.commitText(" ", 1)
-            lastSpaceTime = now
-        }
-        updateAutoCaps()
     }
 
     // --- suggestions ----------------------------------------------------
@@ -369,9 +447,12 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
     private fun onCandidate(index: Int) {
         val ic = currentInputConnection ?: return
         val cand = currentSuggestion?.candidates?.getOrNull(index) ?: return
+        ic.beginBatchEdit()
         ic.setComposingText(cand, 1)
         ic.finishComposingText()
         ic.commitText(" ", 1)
+        ic.endBatchEdit()
+        phantomSpace = true
         composing.setLength(0)
         clearSuggestions()
         lastSpaceTime = SystemClock.uptimeMillis()
@@ -615,6 +696,8 @@ class TypelesslessImeService : InputMethodService(), KeyboardView.OnKeyboardActi
 
     private companion object {
         const val TAG = "typelessless"
+        const val SPACE_EATERS = ".,!?;:)]}" // punctuation not usually preceded by a space
+        const val AUTO_SPACE_AFTER = ".,!?;:" // punctuation that gets a trailing space
         val BG = Color.parseColor("#1E1E1E")
         val REC = Color.parseColor("#E5534B")
         val PROC = Color.parseColor("#C9922B")
